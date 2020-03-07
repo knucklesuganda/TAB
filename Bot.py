@@ -1,16 +1,23 @@
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 import config
 import messages
-from Database import DataBase
-from time import sleep
 import logging
+
+from os import environ
+import django
+
+environ.setdefault("DJANGO_SETTINGS_MODULE", "telegram_bot.settings")
+django.setup()
+
+from Question.models import Question
+from django.core.exceptions import ObjectDoesNotExist
 
 
 def bot_start():
+
     bot = telebot.TeleBot(config.token)
-    database = DataBase(config.database_name)
 
     logger = logging.getLogger("information")
     logger.setLevel(logging.INFO)
@@ -19,18 +26,27 @@ def bot_start():
     fh.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
     logger.addHandler(fh)
 
+    def get_question_from_user(message):
+        questions = Question.objects.filter(text__iregex=message.text)
+        keyboard = InlineKeyboardMarkup()
+
+        if not questions:
+            bot.send_message(message.from_user.id, messages.no_answer)
+            return
+
+        for question in questions:
+            keyboard.add(InlineKeyboardButton(text=question.text[:30], callback_data=question.pk))
+
+        bot.send_message(message.from_user.id, messages.choose_question, reply_markup=keyboard)
+
     @bot.message_handler(content_types=['text'])
     def main_handle(message):
         logger.info(f"User {message.from_user.username} sent {message.text}")
         message.text = message.text.lower()
 
         if message.text == "/start":
-            keyboard = InlineKeyboardMarkup()
-
-            for question in database.get_questions():
-                keyboard.add(InlineKeyboardButton(text=question[0], callback_data=question[1]))
-
-            bot.send_message(message.from_user.id, messages.start, reply_markup=keyboard)
+            bot.send_message(message.from_user.id, messages.write_question)
+            bot.register_next_step_handler(message, get_question_from_user)
 
         elif message.text == "/help":
             bot.send_message(message.from_user.id, messages.help)
@@ -41,17 +57,30 @@ def bot_start():
 
     @bot.callback_query_handler(func=lambda call: True)
     def button_handlers(call):
-        if call.data in database.get_questions_forward():
-            logger.info(f"Button with '{call.data}' text pressed")
-
-            for x, answer in enumerate(database.get_answers()):
-                message_text = f"{x + 1}) {answer[0]}\n{answer[1]}\n"
-                bot.send_message(call.message.chat.id, message_text)
-
+        try:
+            question = Question.objects.get(pk__exact=call.data)
             bot.delete_message(call.message.chat.id, call.message.message_id)
+            keyboard = InlineKeyboardMarkup()
 
-        else:
-            bot.send_message(call.message.chat.id, messages.no_answer)
+            if not question.forward:
+                message_text = f"Answer: {question.text}\n\n{question.url}"
+                bot.send_message(call.message.chat.id, message_text)
+                return
+
+            forwarded_questions = Question.objects.filter(back__exact=question.forward)
+            if not forwarded_questions:
+                bot.send_message(call.message.chat.id, messages.no_answer)
+                return
+
+            for forwarded_question in forwarded_questions:
+                keyboard.add(InlineKeyboardButton(text=forwarded_question.text,
+                                                  callback_data=forwarded_question.pk))
+
+            bot.send_message(call.message.chat.id,
+                             messages.choose_question, reply_markup=keyboard)
+
+        except ObjectDoesNotExist as exc:
+            bot.send_message(call.message.chat.id, messages.does_not_exist)
 
     logger.info("Bot started")
     bot.polling(none_stop=True, interval=0)
