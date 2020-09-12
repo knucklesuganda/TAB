@@ -16,8 +16,8 @@ from django.core.exceptions import ObjectDoesNotExist
 
 
 def bot_start():
-
     bot = telebot.TeleBot(config.token)
+    new_question = Question()
 
     logger = logging.getLogger("information")
     logger.setLevel(logging.INFO)
@@ -39,6 +39,16 @@ def bot_start():
 
         bot.send_message(message.from_user.id, messages.choose_question, reply_markup=keyboard)
 
+    def add_question(message):
+        try:
+            new_question.text, new_question.answer, new_question.back,\
+                new_question.forward, new_question.url = message.text.split(";")
+            new_question.save()
+            bot.send_message(message.from_user.id, messages.question_added.format(new_question.id))
+
+        except Exception as exc:
+            bot.send_message(message.from_user.id, str(exc))
+
     @bot.message_handler(content_types=['text'])
     def main_handle(message):
         logger.info(f"User {message.from_user.username} sent {message.text}")
@@ -49,10 +59,17 @@ def bot_start():
             bot.register_next_step_handler(message, get_question_from_user)
 
         elif message.text == "/help":
-            bot.send_message(message.from_user.id, messages.help)
+            bot.send_message(message.from_user.id, messages.help_message)
+
+        elif message.text == "/add_question":
+            if message.from_user.username == config.admin_username:
+                bot.send_message(message.from_user.id, messages.add_question)
+                bot.register_next_step_handler(message, add_question)
+            else:
+                bot.send_message(message.from_user.id, messages.not_admin)
 
         else:
-            logger.info("User {message.from_user.username} have found nothing")
+            logger.info(f"User {message.from_user.username} have found nothing")
             bot.send_message(message.from_user.id, messages.not_found)
 
     @bot.callback_query_handler(func=lambda call: True)
@@ -63,7 +80,9 @@ def bot_start():
             keyboard = InlineKeyboardMarkup()
 
             if not question.forward:
-                message_text = f"Answer: {question.text}\n\n{question.url}"
+                message_text = f"Answer: {question.answer if question.answer else 'No text answer'}." \
+                               f" \n\n{question.url}"
+
                 bot.send_message(call.message.chat.id, message_text)
                 return
 
@@ -76,8 +95,8 @@ def bot_start():
                 keyboard.add(InlineKeyboardButton(text=forwarded_question.text,
                                                   callback_data=forwarded_question.pk))
 
-            bot.send_message(call.message.chat.id,
-                             messages.choose_question, reply_markup=keyboard)
+            bot.send_message(call.message.chat.id, messages.choose_question,
+                             reply_markup=keyboard)
 
         except ObjectDoesNotExist as exc:
             bot.send_message(call.message.chat.id, messages.does_not_exist)
