@@ -1,2 +1,0 @@
-token = ''
-admin_username = ''

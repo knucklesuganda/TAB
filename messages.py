@@ -18,3 +18,5 @@ add_question = "Add question to your bot." \
 question_added = "Question added with id {0}"   # When question is already added
 
 not_admin = "You are not an admin."
+
+json_error = "Send valid JSON"
